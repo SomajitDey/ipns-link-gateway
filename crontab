@@ -20,6 +20,8 @@ export GW_REPO=
 export API_TKN=
 # Comma-separated list of DNSLinks that are CNAMEd to your gateway. E.g. "a.tld, b.tld"
 export DNSLinks=
+# Any empty public directory with a short absolute path. Would be created if non-existent. E.g. /tmp/public
+export SOCK_DIR=
 
 ####################### Edit No Further ############################
 

@@ -28,11 +28,11 @@ Example: ipns-link-gateway -a \$PASSWORD -p \$PORT \$URL
 " 
 } >&2; export -f usage
 
-export version=1.0.8
+export version=1.0.9
 export IPFS_PATH="${PWD}/.ipfs"
 export cache_dir="${IPFS_PATH}/.cache"
 export GNUPGHOME="${IPFS_PATH}/.gpg"
-export sockets="${IPFS_PATH}/.sockets"
+export sockets="${IPFS_PATH}/.sockets"; mkdir -p "${SOCK_DIR}"
 export pid_file="${IPFS_PATH}/.pid"
 export ipfs_subd_gw="${IPFS_SUBD_GW:-https://cf-ipfs.com}" # For redirects
 export ipfs_path_gw="${IPFS_PATH_GW:-https://ipfs.io}" # For direct downloads
@@ -79,16 +79,29 @@ inject_conn_close(){
   sed -u '/^\r$/q' | sed -u '/^Connection:/Id' | sed -u '1aConnection: close\r';cat
 }; export -f inject_conn_close
 
+shorten_peerID(){
+  # Brief: Shortening is sometimes needed as peerIDs are so large. Expects compatible (e.g. base36) peerID as arg
+  # To keep maximum entropy, transfer the peerID to base64 and then take last 32 (base64) characters
+  # Usage: shorten_peerID <base36 peerID>
+  local b64_peerID="$(ipfs cid format -b base64 <<< "${1}")"; b64_peerID="${b64_peerID//\//-}"
+  echo "${b64_peerID: -32:32}"
+} 2>/dev/null; export -f shorten_peerID
+
 p2p_stream(){
   # Brief: Establish bi-directional p2p stream with given peerID (base36, codec=libp2p-key)
-  local peerID="${1}"
-  # Note: Socket filename must be <=40 characters, whereas peerID is longer
-  # So transfer the peerID to base64 and then take last 32 (base64) characters
-  local b64_peerID="$(ipfs cid format -b base64 <<< "${peerID}")"; b64_peerID="${b64_peerID//\//-}"
-  local short_alias="${b64_peerID: -32:32}"
-  local usock="${sockets}/${short_alias}" # Unix socket
+  # Usage: p2p_stream [-s] <base36 peerID>
+  local OPTIND=1 opt setup_only=false
+  getopts s opt; [[ "${opt}" == s ]] && setup_only=true
+  local peerID="${!OPTIND}"
+  # Note: Socket filename must be <=40 characters, whereas peerID is longer, so need to shorten it
+  local short_alias="$(shorten_peerID "${peerID}")"
+  local usock="${SOCK_DIR:-"${sockets}"}/${short_alias}" # Unix socket
   local nodeID="$(key_val multiaddress.ID "${peerID}")"
-  [[ -S "${usock}" ]] || ipfs p2p forward /x/ipns-link/"${peerID}" /unix/"${usock#/}" /p2p/"${nodeID}"
+  if ! [[ -S "${usock}" ]]; then
+    ipfs p2p forward /x/ipns-link/"${peerID}" /unix/"${usock#/}" /p2p/"${nodeID}"
+    chmod a+rw "${usock}" # So that ssh port forwarding can be set up from other accounts
+  fi
+  if $setup_only; then echo "${usock}"; return 0; fi
   inject_conn_close | socat -T10 STDIO UNIX-CLIENT:"${usock}" | inject_conn_close
   # Allowing persistent connections might forward even cache requests to Origin-server. Hence the injection.
   exit
@@ -189,6 +202,18 @@ rate_limiter(){
   fi 3>>"${register}"
 } &>/dev/null; export -f rate_limiter
 
+show(){
+  # Brief: Pass given message to client
+  # Usage: show <message>
+  local msg="${1}"
+  printf "%s\r\n" "HTTP/1.1 200 OK"
+  printf "Connection: %s\r\n" "close"
+  printf "Content-Length: %d\r\n" "$((${#msg}+1))"
+  echo -e "\r"
+  echo "${msg}"
+  exit
+} 2>/dev/null; export -f show
+
 error(){
   # Brief: Pass HTTP error to client
   # Usage: error [<code>] [<reason-phrase>/<status>]
@@ -242,7 +267,7 @@ read_req_head(){
 
 serve(){
   # Brief: Serve resource/webpage at the given path
-  # Usage: serve [<path> | <(cmd) | <named-pipe>]
+  # Usage: serve [<path>]
   [[ "${method}" == @(GET|HEAD) ]] || error 405 "Method Not Allowed"
   local page="${1%\?}";
   local page="${page:-index.html}"; page="${page##*/}" # Makes sure only pages from within repo are served
@@ -334,7 +359,8 @@ forward(){
 handler(){
   # Brief: Main handler routine spawned by server on new connection from client.
   local ipfs_pid; read -u3 ipfs_pid
-  trap "flock -u 3 ; flock -n ${pid_file} -c 'kill -STOP ${ipfs_pid}'" exit # Reason for flock -n: If failed to lock, the running handler will pause on exit
+  trap "flock -u 3 ; is_expired ${pid_file} 3600 && flock -n ${pid_file} -c 'kill -STOP ${ipfs_pid}'" exit
+  # Reason for flock -n: If failed to lock, the running handler will pause on exit
   # Resume ipfs after acquiring shared lock
   flock -s 3; kill -CONT "${ipfs_pid}"
   # Check if IPFS node is online and unpaused. Using API socket for this is faster than `ipfs swarm peers`
@@ -353,6 +379,15 @@ handler(){
       redirect "${proto}://${peerID}.ipns.${gateway_host}${port}${fwd_path}"
     elif [[ "${path}" =~ ^/ipfs/.* ]]; then
       redirect "${ipfs_subd_gw}${path}" 303 "See Other"
+    elif [[ "${path}" =~ ^/prep/([-[:alnum:].]+) ]]; then
+      local peerID="$(b36_peerID "${BASH_REMATCH[1]}")" usock
+      if [[ -n "${peerID}" ]] && cache_manifest "${peerID}" && connect "${peerID}" && \
+        usock="$(p2p_stream -s "${peerID}")"; then
+        touch "${pid_file}"
+        show "ssh -NL <local_port>:${usock} nokey@${gateway_host}"
+      else
+        error
+      fi
     else
       serve "${path#/}"
     fi      

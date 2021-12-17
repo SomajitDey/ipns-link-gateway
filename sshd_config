@@ -1,0 +1,13 @@
+# Create a restricted, public (viz. credential-less) user-account "nokey"
+#   sudo adduser --shell $(which false) nokey ; sudo passwd -d nokey
+# Append the following to /etc/ssh/sshd_config, followed by `sudo service ssh restart`
+
+Match User nokey
+  AllowTcpForwarding yes
+  AllowStreamLocalForwarding local
+  PasswordAuthentication yes
+  PermitEmptyPasswords yes
+  X11Forwarding no
+  PermitTTY no
+  MaxSessions 0
+  PermitRootLogin no

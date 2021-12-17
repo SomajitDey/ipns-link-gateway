@@ -102,13 +102,22 @@ If you have [IPFS Companion](https://github.com/ipfs/ipfs-companion) running, yo
    | CNAME | *.ipfs | @                               |
 
 2. Generate an API token for programatically editing your DNS records.
+
 3. Test if gateway is running locally. This makes sure you've all the dependencies in place. Once tested, kill the gateway using its PID.
+
 4. Open ports 443 (HTTPS) and 80 (HTTP) for incoming traffic.
+
 5. Install [Caddy](https://caddyserver.com/download) for Linux amd64, custom built with your DNS provider's plugin. For example's sake, we shall assume your DNS provider is CloudFlare. **Tip**: Download the binary with `curl -Lo caddy $URL` instead of `wget`. Then,`chmod +x caddy ; sudo install caddy /usr/local/bin`
+
 6. Edit the [crontab file](/crontab) within this repo by putting appropriate values for all the environment variables
+
 7. Set up a cronjob for root as instructed in the crontab file.
+
 8. Launch the script : `sudo /path/to/edited/crontab/file`. This would launch the gateway and caddy with progress logged in `cron.log` and `caddy.log` within the repo.
+
 9. In a browser, test if the gateway is accessible at your domain.
+
+10. To enable TCP port-forwarding, follow the instructions in [sshd_config](/sshd_config).
 
 [Let us know](mailto:contact@ipns.live) anytime you're stuck. We'll help.
 
